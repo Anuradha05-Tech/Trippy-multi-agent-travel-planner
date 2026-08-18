@@ -1,6 +1,8 @@
+import asyncio
 import os
 from typing import TypedDict, Annotated
 import operator
+import uuid
 
 import psycopg
 from psycopg.rows import dict_row
@@ -13,7 +15,8 @@ from langchain_core.messages import (
     AIMessage,   
 )
 from langchain_groq import ChatGroq
-from tools.tavily_tool import tavily_search
+#from tools.tavily_tool import tavily_search
+from mcp_client import tavily_mcp_search
 from tools.flight_tool import search_flights
 
 from dotenv import load_dotenv
@@ -50,7 +53,8 @@ def flight_agent(state: TravelState):
 # 2. Hotel Agent Node
 def hotel_agent(state: TravelState):
     query = f"Best hotels for {state['user_query']}"
-    hotel_results = tavily_search(query)
+    #hotel_results = tavily_search(query)
+    hotel_results = asyncio.run(tavily_mcp_search(query))
     return {
         "hotel_results": hotel_results,
         "messages": [
@@ -129,11 +133,15 @@ else:
     from langgraph.checkpoint.memory import MemorySaver
     app = graph.compile(checkpointer=MemorySaver())
 
-if __name__ == "__main__":
-    config = {"configurable": {"thread_id": "1"}}
-    test_query = "Paris trip for 5 days"
-    print(f"Testing local execution for: {test_query}...")
+
     
+
+if __name__ == "__main__":
+    test_query = "Plan a 3-day trip to Paris"
+    config = {
+        "configurable": {"thread_id": str(uuid.uuid4())}
+    }
+
     for chunk in app.stream(
         {
             "messages": [HumanMessage(content=test_query)],
