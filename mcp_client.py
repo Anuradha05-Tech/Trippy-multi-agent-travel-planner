@@ -1,23 +1,23 @@
 import os
-import asyncio
-from typing import Any
+from typing import Any, cast
 
-from dotenv import load_dotenv
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
-load_dotenv()
+from config import (
+    AVIATION_STACK_API_KEY,
+    OPENWEATHER_API_KEY,
+    TAVILY_API_KEY,
+)
 
-TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
-AVIATION_STACK_API_KEY = os.getenv("AVIATION_STACK_API_KEY") or ""
-OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY") or ""
-
+# Create MCP Client
 client = MultiServerMCPClient(
-    {
+    cast(Any, {
         "tavily": {
             "transport": "streamable_http",
             "url": f"https://mcp.tavily.com/mcp/?tavilyApiKey={TAVILY_API_KEY}"
         },
-         "aviation_stack": {
+
+        "aviationstack": {
             "transport": "stdio",
             "command": "/home/user/Documents/multi-agent travel planner/aviationstack-mcp/.venv/bin/python",
             "args": [
@@ -30,109 +30,84 @@ client = MultiServerMCPClient(
                 "AVIATION_STACK_API_KEY": AVIATION_STACK_API_KEY
             }
         },
-        "weather":{
-            "transport":"stdio",
-            "command":"/home/user/Documents/multi-agent travel planner/myenv/bin/python",
+        "weather": {
+            "transport": "stdio",
+            "command": "/home/user/Documents/multi-agent travel planner/myenv/bin/python",
             "args": [
-                "/home/user/Documents/multi-agent travel planner/custom_weather_mcp_server.py"],
+                "/home/user/Documents/multi-agent travel planner/custom_weather_mcp_server.py"
+            ],
             "env": {
                 "OPENWEATHER_API_KEY": OPENWEATHER_API_KEY
             }
-            
         }
-    }
+
+
+    })
 )
 
 
-search_tool: Any = None
-aviation_tools: dict[str, Any] = {}
-
-async def initialize_mcp():
-
-    global search_tool
-    global aviation_tools
-
-    if search_tool is not None and aviation_tools:
-        return
-
-    tools = await client.get_tools()
-
-    print("\nAvailable MCP Tools:\n")
-
-    for tool in tools:
-        print(tool.name)
-
-    search_tool = next(
-        tool
-        for tool in tools
-        if tool.name == "tavily_search"
-    )
-
-    aviation_tools = {
-        tool.name: tool
-        for tool in tools
-        if tool.name != "tavily_search"
-    }
+# Cache tools so we don't load them repeatedly
+_tools_cache = None
 
 
+async def get_tools():
+    global _tools_cache
 
+    if _tools_cache is None:
+        try:
+            _tools_cache = await client.get_tools()
 
+        except Exception as e:
+            print("\n========== FULL ERROR ==========")
+            print(type(e))
+            print(repr(e))
 
-async def tavily_mcp_search(query: str):
-    await initialize_mcp()
-    result = await search_tool.ainvoke(
-        {
-            "query": query
-        }
-    )
-    return result
+            if hasattr(e, "exceptions"):
+                print("\nSUB EXCEPTIONS:")
+                for i, sub in enumerate(e.exceptions):
+                    print(f"\n--- Exception {i+1} ---")
+                    print(type(sub))
+                    print(repr(sub))
 
+            raise
 
+    return _tools_cache
 
-
-async def aviation_mcp_call(
-    tool_name: str,
-    tool_args: dict | None = None
-):
-
-    tools = await client.get_tools()
+async def call_tool(tool_name: str, args: dict = None):
+    tools = await get_tools()
 
     tool = next(
-        t for t in tools
-        if t.name == tool_name
+        (tool for tool in tools if tool.name == tool_name),
+        None,
     )
 
-    result = await tool.ainvoke(
-        tool_args or {}
-    )
+    if tool is None:
+        raise ValueError(f"Tool '{tool_name}' not found")
 
-    return result
-
+    return await tool.ainvoke(args or {})
 
 
-async def get_airports():
-
-    await initialize_mcp()
-
-    tool = aviation_tools.get("list_airports")
-
-    if not tool:
-        return "Airport tool unavailable"
-
-    result = await tool.ainvoke({})
-
-    return result
+# ------------------------
+# Tavily MCP Tools
+# ------------------------
 
 
-async def get_airlines():
 
-    await initialize_mcp()
+async def tavily_search(query: str):
+    return await call_tool("tavily_search", {"query": query})
 
-    tool = aviation_tools.get("list_airlines")
 
-    if not tool:
-        return "Airline tool unavailable"
+async def list_airports(search: str = "", limit: int = 10):
+    return await call_tool("list_airports", {"search": search, "limit": limit, "offset": 0})
 
-    result = await tool.ainvoke({})
 
-    return result
+async def list_airlines(search: str = "", limit: int = 10):
+    return await call_tool("list_airlines", {"search": search, "limit": limit, "offset": 0})
+
+
+async def current_weather(city: str):
+    return await call_tool("get_current_weather", {"city": city})
+
+
+async def forecast(city: str):
+    return await call_tool("get_forecast", {"city": city})

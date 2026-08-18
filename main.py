@@ -15,16 +15,24 @@ from langchain_core.messages import (
     AIMessage,   
 )
 from langchain_groq import ChatGroq
-#from tools.tavily_tool import tavily_search
-from mcp_client import tavily_mcp_search
-from tools.flight_tool import search_flights
+
+from mcp_client import (
+    tavily_mcp_search,
+     get_airports ,
+      get_airlines,
+      aviation_mcp_call,
+      weather_mcp_search,
+      forecast_mcp_search,
+      extract_destination)
+
+
 
 from dotenv import load_dotenv
 load_dotenv()
 
 # Initialize LLM
 llm = ChatGroq(
-    model="llama-3.3-70b-versatile"
+    model="qwen/qwen3.6-27b"
 )
 
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -37,18 +45,88 @@ class TravelState(TypedDict):
     hotel_results: str
     itinerary: str
     llm_calls: int
+    weather_results: str
+    
 
 # 1. Flight Agent Node
+
+FLIGHT_AGENT_PROMPT = """
+You are a travel flight expert.
+
+User Query:
+{query}
+
+Airport Information:
+{airport_data}
+
+Airline Information:
+{airline_data}
+
+Generate:
+
+1. Likely departure airport
+2. Likely arrival airport
+3. Airlines serving this route
+4. Typical flight duration
+5. Estimated airfare range
+6. Peak season pricing warning
+7. Booking advice
+
+Return concise travel guidance.
+"""
+
+
+
 def flight_agent(state: TravelState):
+    print("\nINSIDE FLIGHT AGENT\n")
+
     query = state["user_query"]
-    flight_data = search_flights(query)
+
+    try:
+
+        airports = asyncio.run(
+            aviation_mcp_call(
+                "list_airports"
+            )
+        )
+
+        airlines = asyncio.run(
+            aviation_mcp_call(
+                "list_airlines"
+            )
+        )
+
+        prompt = FLIGHT_AGENT_PROMPT.format(
+            query=query,
+            airport_data=str(airports)[:1000],
+            airline_data=str(airlines)[:1000]
+        )
+
+        response = llm.invoke([
+            SystemMessage(
+                content="You are an expert travel flight planner."
+            ),
+            HumanMessage(content=prompt)
+        ])
+
+        flight_data = response.content
+
+    except Exception as e:
+
+        flight_data = f"Flight information unavailable: {str(e)}"
+
     return {
         "flight_results": flight_data,
         "messages": [
-            AIMessage(content="Flight results fetched")
+            AIMessage(
+                content="Flight recommendations generated"
+            )
         ],
         "llm_calls": state.get("llm_calls", 0) + 1
     }
+
+
+
 
 # 2. Hotel Agent Node
 def hotel_agent(state: TravelState):
@@ -63,42 +141,71 @@ def hotel_agent(state: TravelState):
         "llm_calls": state.get("llm_calls", 0) + 1
     }
 
+def weather_agent(state: TravelState):
+
+    city = extract_destination(state["user_query"])
+
+    weather_data = asyncio.run(
+        weather_mcp_search(city)
+    )
+
+    forecast_data = asyncio.run(
+        forecast_mcp_search(city)
+    )
+
+    return {
+        "weather_results": f"""
+        Current Weather:
+        {weather_data}
+
+        Forecast:
+        {forecast_data}
+        """,
+        "messages": [
+            AIMessage(
+                content="Weather information fetched"
+            )
+        ]
+    }
+
 # 3. Itinerary Agent Node
 def itinerary_agent(state: TravelState):
+    print("=== DEBUG ITINERARY AGENT ===")
+    print(f"flight_results len: {len(str(state.get('flight_results')))}")
+    print(f"hotel_results len: {len(str(state.get('hotel_results')))}")
+    print(f"weather_results len: {len(str(state.get('weather_results')))}")
+    
     prompt = f"""
     Create a travel itinerary.
     User Query : {state['user_query']}
-    Flight_results : {state['flight_results']} 
-    hotel_results: {state['hotel_results']}
+    Flight_results : {str(state['flight_results'])[:1000]} 
+    hotel_results: {str(state['hotel_results'])[:1000]}
+    weather_results: {str(state['weather_results'])[:1000]}
     """
+    print(f"Constructed prompt len: {len(prompt)}")
+    print("=============================")
+
+    try:
+        response = llm.invoke([
+            SystemMessage(content="You are an expert travel planner"),
+            HumanMessage(content=prompt)
+        ])
+        itinerary_data = response.content
+        msg = response
+    except Exception as e:
+        print(f"ERROR calling LLM in itinerary_agent: {e}")
+        itinerary_data = f"Itinerary generation failed: {str(e)}"
+        msg = AIMessage(content=itinerary_data)
    
-    response = llm.invoke([
-        SystemMessage(content="You are an expert travel planner"),
-        HumanMessage(content=prompt)
-    ])
-
     return {
-        "itinerary": response.content,
-        "messages": [response],
+        "itinerary": itinerary_data,
+        "messages": [msg],
         "llm_calls": state.get('llm_calls', 0) + 1
     }
 
-# 4. Final Agent Node
-def final_agent(state: TravelState):
-    final_prompt = f""" Generate final travel response.
-    flights : {state["flight_results"]}
-    hotels : {state["hotel_results"]}
-    itinerary : {state['itinerary']}
-    """
 
-    response = llm.invoke([
-        HumanMessage(content=final_prompt)
-    ])
 
-    return {
-        "messages": [response],
-        "llm_calls": state.get('llm_calls', 0) + 1
-    }
+
 
 # Create graph at the global module level (not inside itinerary_agent)
 # Note: '# type: ignore' silences the false positive warning from Pyrefly/Pyright
@@ -107,15 +214,16 @@ graph = StateGraph(TravelState)  # type: ignore
 # Add nodes
 graph.add_node("flight_agent", flight_agent)
 graph.add_node("hotel_agent", hotel_agent)
+graph.add_node("weather_agent", weather_agent)
 graph.add_node("itinerary_agent", itinerary_agent)
-graph.add_node("final_agent", final_agent)
+
 
 # Add edges
 graph.add_edge(START, "flight_agent")
 graph.add_edge("flight_agent", "hotel_agent")
-graph.add_edge("hotel_agent", "itinerary_agent")
-graph.add_edge("itinerary_agent", "final_agent")
-graph.add_edge("final_agent", END)
+graph.add_edge("hotel_agent", "weather_agent")
+graph.add_edge("weather_agent", "itinerary_agent")
+graph.add_edge("itinerary_agent", END)
 
 # Compile app with Postgres checkpointer, fallback to MemorySaver if unavailable
 if DATABASE_URL:
