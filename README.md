@@ -1,72 +1,75 @@
-# ✈️ Multi-Agent AI Travel Booking System
+# ✈️ Real-World Multi-Agent AI Travel Planner
 
-A state-of-the-art, multi-agent travel planning system built on **LangGraph**, powered by **Groq (LLaMA 3.3 70B)**, and styled with a premium dark-themed **Streamlit** frontend. 
+A state-of-the-art, autonomous multi-agent travel planning system built on **LangGraph**, powered by **Groq** (with automatic model fallbacks), and styled with a premium dark-themed **Streamlit** dashboard.
 
-The application orchestrates specialized agents—Flight, Hotel, Itinerary, and Final—working sequentially to search real-time data, build a structured itinerary, and compile a comprehensive travel proposal.
+The application orchestrates a team of specialized agents—Guardrail, Supervisor, Flight, Hotel, Weather, Budget, Itinerary, and Concierge—collaborating to dynamically search real-time data, build a structured itinerary, and compile a polished, download-ready travel proposal.
 
 ---
 
 ## 🗺️ Architectural Workflow
 
-The system is powered by **LangGraph** to coordinate agents via a sequential graph workflow. State is persisted using a PostgreSQL checkpointer (`PostgresSaver`) for active sessions and falls back gracefully to in-memory tracking (`MemorySaver`) if a database connection is not established.
+The system is coordinated via a **StateGraph** in LangGraph. Conversation state is persisted using a PostgreSQL checkpointer (`PostgresSaver`) for active sessions and falls back automatically to in-memory tracking (`MemorySaver`) if the database is not configured.
 
 ```mermaid
-graph TD
-    START([Start Query]) --> FA[✈️ Flight Agent]
-    FA --> HA[🏨 Hotel Agent]
-    HA --> IA[🗓️ Itinerary Agent]
-    IA --> FI[🧠 Final Agent]
-    FI --> END([End / Render Plan])
-
-    subgraph State Retention & APIs
-        FA -.->|AviationStack API| FA_API[(Flight DB)]
-        HA -.->|Tavily Search API| HA_API[(Web Search)]
-        IA -.->|Groq LLaMA 3.3| LLM_IA[LLM Core]
-        FI -.->|Groq LLaMA 3.3| LLM_FI[LLM Core]
-        State[(PostgreSQL / Memory checkpointer)] -.-> FA
-        State -.-> HA
-        State -.-> IA
-        State -.-> FI
+flowchart TD
+    Start([User Input Query]) --> Guard[🛡️ Guardrail Agent]
+    Guard -->|Invalid| Rejected[Show Rejection / Ask Again]
+    Guard -->|Valid| Super[🤖 Supervisor Agent]
+    
+    subgraph Specialist Agents (Parallel Execution)
+        Super -->|Selects| FA[✈️ Flight Agent]
+        Super -->|Selects| HA[🏨 Hotel Agent]
+        Super -->|Selects| WA[☀️ Weather Agent]
+        Super -->|Selects| BA[💰 Budget Agent]
     end
+    
+    FA --> IT[📝 Itinerary Agent]
+    HA --> IT
+    WA --> IT
+    BA --> IT
+    
+    IT --> Interrupt{Approval Interrupt?}
+    Interrupt -->|User Adjustments| Super
+    Interrupt -->|Approved| Concierge[🏆 Concierge / Final Response Agent]
+    
+    Concierge --> End([Render Timeline & Plan])
 ```
 
 ---
 
 ## ✨ Features
 
-- **Sequential Multi-Agent Pipeline**: Specialized agents handle different parts of the travel search and itinerary planning.
-- **Real-Time Data Integration**:
-  - **AviationStack API** gathers live flight records based on query matching.
-  - **Tavily Search API** retrieves up-to-date hotel details and sightseeing information.
-- **Session-Based State Persistence**: Keeps track of conversation history and agents' state per thread using PostgreSQL checkpointer persistence.
-- **Premium User Interface**: Modern, custom-styled Streamlit interface featuring a sleek dark mode layout, progress trackbars, interactive metrics, and destination cards.
-- **Export & Auto-Save**: Auto-saves travel plans as markdown files inside the `travel_plans/` folder and allows manual downloads via a download button.
-
----
-
-## 🛠️ Tech Stack
-
-- **Framework**: [LangGraph](https://github.com/langchain-ai/langgraph)
-- **Large Language Model**: [Groq Cloud (LLaMA 3.3 70B Versatile)](https://groq.com/)
-- **Frontend UI**: [Streamlit](https://streamlit.io/)
-- **Search Engine**: [Tavily AI Search](https://tavily.com/)
-- **Flight API**: [AviationStack API](https://aviationstack.com/)
-- **Database / Checkpointer**: [PostgreSQL (via psycopg)](https://www.postgresql.org/)
+- **🛡️ Input Guardrail & Validation**: Screens user queries to filter out off-topic requests and ensure clean, structured parameters.
+- **🤖 Dynamic Supervisor Orchestration**: Analyzes queries and dynamically selects which specialist agents are required, avoiding unnecessary tool invocation.
+- **⚙️ Multi-Agent Specialist Layer**:
+  - **Flight Agent**: Provides carrier, routing, and booking guidance using live flight MCP data.
+  - **Hotel Agent**: Selects budget, mid-range, and luxury accommodations using Tavily search.
+  - **Weather Agent**: Details current temperature and forecast outlook via a custom Weather MCP server.
+  - **Budget Agent**: Analyzes expenses, highlights price risks, and provides concrete saving tips.
+- **🔄 Robust Token Rate-Limit Optimizations**:
+  - Enforces tight output constraints (100–200 words per specialist agent) to guarantee compliance with the **8,000 TPM limit** of Groq's free models.
+  - Implements **automatic LLM fallbacks** (`openai/gpt-oss-20b` and `openai/gpt-oss-120b`) in `config.py` using LangChain's `.with_fallbacks()` decorator, allowing 24/7 reliability even when primary Qwen daily token limits are exhausted.
+- **🎨 Premium User Interface**: A bespoke, dark-themed Streamlit frontend featuring:
+  - Responsive pipeline trackbars showing agent execution states.
+  - Custom timeline renderers displaying daily activities.
+  - Responsive, scroll-wrap HTML tables (`.responsive-table-container`) that adapt to any screen size without spilling over.
+- **💾 Session Retention & Export**: Auto-saves travel plans to markdown and supports manual downloads.
 
 ---
 
 ## 📁 Project Structure
 
 ```text
-├── tools/
-│   ├── flight_tool.py      # Connects to AviationStack API for flight availability
-│   └── tavily_tool.py      # Queries Tavily search engine for hotels/activities
-├── travel_plans/           # Generated markdown plans are auto-saved here
-├── main.py                 # Core LangGraph workflow definition, nodes, and checkpointer setup
-├── frontend.py             # Sleek Streamlit dark-mode application UI
-├── .env                    # Environment API keys and database configuration
-├── pyproject.toml          # Project metadata & Pyrefly tool configurations
-└── pyrefly.toml            # Python environment definitions
+├── agents.py                 # Core agent logic, system prompts, and text processing
+├── config.py                 # LLM initialization (primary + fallback chains) and API credentials
+├── custom_weather_mcp_server.py # Custom MCP server providing real-time weather information
+├── frontend.py               # Streamlit application UI, timeline, and table rendering
+├── graph.py                  # LangGraph StateGraph orchestration and compilation
+├── mcp_client.py             # Client wrappers for connecting to Tavily, Weather, and Flight MCP tools
+├── state.py                  # TravelState schemas and TypedDict models
+├── test_app.py               # End-to-end programmatic testing script
+├── travel_plans/             # Generated travel itineraries auto-save here
+└── .env                      # API keys and Database connection URL
 ```
 
 ---
@@ -75,16 +78,21 @@ graph TD
 
 ### 1. Prerequisites
 - Python 3.10+
-- A Groq API Key, Tavily API Key, and AviationStack API Key.
+- Groq API Key (Free developer account available)
+- Tavily API Key
+- OpenWeather API Key
+- AviationStack API Key
 
-### 2. Install Dependencies
-Activate the local virtual environment and install the required packages:
+### 2. Setup Virtual Environment & Install Dependencies
+Activate the local environment and install packages:
 
 ```bash
 # Activate virtual environment
-source myenv/bin/activate  # Or your platform-specific activation command
+source myenv/bin/activate  # On Linux/macOS
+# or
+myenv\Scripts\activate     # On Windows
 
-# Install dependencies
+# Install required dependencies
 pip install streamlit langgraph langchain-core langchain-groq tavily-python requests python-dotenv psycopg psycopg-binary
 ```
 
@@ -93,11 +101,12 @@ Create or modify the `.env` file in the root directory:
 
 ```env
 GROQ_API_KEY=your_groq_api_key
-AVIATIONSTACK_API_KEY=your_aviationstack_api_key
 TAVILY_API_KEY=your_tavily_api_key
+OPENWEATHER_API_KEY=your_openweather_api_key
+AVIATIONSTACK_API_KEY=your_aviationstack_api_key
 
 # Optional: PostgreSQL Database connection string for session retention.
-# If omitted, the graph automatically falls back to in-memory tracking.
+# Falls back to MemorySaver (in-memory tracking) if database connection fails.
 DATABASE_URL=postgresql://username:password@localhost:5432/dbname
 ```
 
@@ -105,18 +114,18 @@ DATABASE_URL=postgresql://username:password@localhost:5432/dbname
 
 ## 🏃 Running the Application
 
-### Backend Workflow Test
-You can run a dry test run of the agent pipeline directly in your terminal:
+### Programmatic Integration Test
+Run a dry test check of the entire supervisor and specialist pipeline using:
 
 ```bash
-python main.py
+python test_app.py
 ```
 
-### Run Streamlit Web Application
-To launch the full visual agent dashboard, run:
+### Start Streamlit Frontend
+Launch the interactive agent planner dashboard:
 
 ```bash
 streamlit run frontend.py
 ```
 
-Open `http://localhost:8501` in your browser to start planning!
+Open your browser to `http://localhost:8501` to start planning your next journey!
