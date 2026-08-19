@@ -229,8 +229,84 @@ h1, h2, h3, .main-title {
 
 /* Sidebar styling */
 section[data-testid="stSidebar"] {
-    background-color: #070a13 !important;
-    border-right: 1px solid rgba(255, 255, 255, 0.05);
+    background-color: #080c16 !important;
+    border-right: 1px solid rgba(255, 255, 255, 0.06);
+    padding-top: 10px !important;
+}
+
+/* Sidebar label styling */
+section[data-testid="stSidebar"] label {
+    color: #a0aec0 !important;
+    font-size: 0.85rem !important;
+    font-family: 'Outfit', sans-serif !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.02em !important;
+    margin-bottom: 8px !important;
+}
+
+/* Sidebar input box styling */
+section[data-testid="stSidebar"] div[data-baseweb="input"] {
+    background-color: rgba(255, 255, 255, 0.02) !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    border-radius: 8px !important;
+    color: #ffffff !important;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.2) !important;
+}
+
+/* Sidebar input focus style */
+section[data-testid="stSidebar"] div[data-baseweb="input"]:focus-within {
+    border-color: #00f2fe !important;
+}
+
+/* Sidebar input text */
+section[data-testid="stSidebar"] input {
+    color: #ffffff !important;
+    font-family: 'Inter', sans-serif !important;
+    font-size: 0.9rem !important;
+}
+
+/* Responsive Table container */
+.responsive-table-container {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin: 16px 0;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.01);
+}
+
+/* Custom Table style */
+.custom-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: 'Inter', sans-serif;
+    table-layout: auto;
+}
+
+.custom-table th {
+    background: rgba(255, 255, 255, 0.04);
+    padding: 10px 14px;
+    text-align: left;
+    font-weight: 600;
+    color: #ffffff;
+    font-size: 0.85rem;
+    border-bottom: 2px solid rgba(255, 255, 255, 0.1);
+    white-space: nowrap;
+}
+
+.custom-table td {
+    padding: 10px 14px;
+    color: #cbd5e0;
+    font-size: 0.82rem;
+    line-height: 1.4;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    word-break: normal;
+    overflow-wrap: break-word;
+}
+
+.custom-table tr:last-child td {
+    border-bottom: none;
 }
 
 /* Streamlit button overrides */
@@ -375,7 +451,7 @@ def parse_markdown_tables(html_text: str) -> str:
         if stripped.startswith('|') and stripped.endswith('|'):
             if not table_started:
                 table_started = True
-                table_html = ['<table style="width:100%; border-collapse:collapse; margin:16px 0; border: 1px solid rgba(255,255,255,0.08); border-radius:8px; overflow:hidden;">']
+                table_html = ['<div class="responsive-table-container"><table class="custom-table">']
                 
             cells = [cell.strip() for cell in stripped.split('|')[1:-1]]
             
@@ -383,25 +459,25 @@ def parse_markdown_tables(html_text: str) -> str:
             if all(cell.replace('-', '').replace(':', '') == '' for cell in cells):
                 continue
                 
-            row_html = '<tr style="border-bottom: 1px solid rgba(255,255,255,0.06);">'
+            row_html = '<tr>'
             for cell in cells:
                 # Replace strong indicators inside tables
                 cleaned_cell = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', cell)
                 if len(table_html) == 1:
-                    row_html += f'<th style="background: rgba(255,255,255,0.04); padding: 10px 14px; text-align: left; font-weight: 600; color: #ffffff; font-size: 0.85rem; border-bottom: 2px solid rgba(255,255,255,0.1);">{cleaned_cell}</th>'
+                    row_html += f'<th>{cleaned_cell}</th>'
                 else:
-                    row_html += f'<td style="padding: 10px 14px; color: #cbd5e0; font-size: 0.82rem; line-height: 1.4;">{cleaned_cell}</td>'
+                    row_html += f'<td>{cleaned_cell}</td>'
             row_html += '</tr>'
             table_html.append(row_html)
         else:
             if table_started:
-                table_html.append('</table>')
+                table_html.append('</table></div>')
                 new_lines.append('\n'.join(table_html))
                 table_started = False
             new_lines.append(line)
             
     if table_started:
-        table_html.append('</table>')
+        table_html.append('</table></div>')
         new_lines.append('\n'.join(table_html))
         
     return '\n'.join(new_lines)
@@ -550,12 +626,15 @@ st.markdown('<p style="color: #a0aec0; margin-bottom: 25px; font-size: 1.05rem;"
 
 # Initialize Session State
 with st.sidebar:
-    st.markdown('<h3 style="color:#ffffff; font-family:\'Outfit\'; margin-bottom: 15px;">Control Panel</h3>', unsafe_allow_html=True)
+    st.markdown('<h3 style="color:#ffffff; font-family:\'Outfit\'; font-weight:700; margin-bottom: 15px; display:flex; align-items:center; gap:8px; font-size:1.45rem;"><span style="color:#00f2fe;">🎛️</span> Control Panel</h3>', unsafe_allow_html=True)
+    st.markdown('<hr style="border-color:rgba(255,255,255,0.06); margin-top:0; margin-bottom:20px;"/>', unsafe_allow_html=True)
+    
     user_id = st.text_input("User ID", value="demo_user")
     
     if "thread_id" not in st.session_state:
         st.session_state.thread_id = f"{user_id}_{uuid.uuid4().hex[:8]}"
         
+    st.markdown('<div style="height: 12px;"></div>', unsafe_allow_html=True)
     if st.button("Start New Planning Thread", use_container_width=True):
         st.session_state.thread_id = f"{user_id}_{uuid.uuid4().hex[:8]}"
         st.session_state.pop("waiting_for_approval", None)
@@ -563,9 +642,12 @@ with st.sidebar:
         st.rerun()
         
     st.markdown(f"""
-    <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; padding: 12px; margin-top: 15px;">
-        <span style="font-size:0.75rem; color:#718096; text-transform:uppercase;">Active Session ID</span><br/>
-        <code style="color:#00f2fe; font-size:0.85rem;">{st.session_state.thread_id}</code>
+    <div style="background: rgba(0, 242, 254, 0.02); border: 1px solid rgba(0, 242, 254, 0.12); border-radius: 10px; padding: 16px; margin-top: 25px; box-shadow: 0 4px 12px rgba(0, 242, 254, 0.02);">
+        <span style="font-size:0.7rem; color:#718096; text-transform:uppercase; letter-spacing: 0.05em; font-weight: 600;">Active Thread ID</span><br/>
+        <div style="display: flex; align-items: center; gap: 8px; margin-top: 8px;">
+            <span style="color: #00f2fe; font-size: 1.1rem; line-height: 1;">🔑</span>
+            <code style="color:#00f2fe; font-size:0.85rem; font-family:\'Courier New\', monospace; font-weight: 700;">{st.session_state.thread_id}</code>
+        </div>
     </div>
     """, unsafe_allow_html=True)
 
