@@ -27,7 +27,7 @@ client = MultiServerMCPClient(
                 "run"
             ],
             "env": {
-                "AVIATION_STACK_API_KEY": AVIATION_STACK_API_KEY
+                "AVIATION_STACK_API_KEY": AVIATION_STACK_API_KEY or ""
             }
         },
         "weather": {
@@ -37,7 +37,7 @@ client = MultiServerMCPClient(
                 "/home/user/Documents/multi-agent travel planner/custom_weather_mcp_server.py"
             ],
             "env": {
-                "OPENWEATHER_API_KEY": OPENWEATHER_API_KEY
+                "OPENWEATHER_API_KEY": OPENWEATHER_API_KEY or ""
             }
         }
 

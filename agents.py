@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from typing import Any
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langgraph.types import interrupt
@@ -22,72 +23,56 @@ def _llm_text(system: str, prompt: str) -> str:
     ])
     return response.content
 
-    def _json_from_llm(text: str) -> dict:
+def _json_from_llm(text: str) -> dict:
     print("\n========== RAW LLM RESPONSE ==========")
     print(text)
     print("======================================\n")
 
-    start = text.index("{")
-    end = text.rindex("}") + 1
+    # 1. Remove <think>...</think> blocks if present
+    clean_text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
-    json_text = text[start:end]
+    # 2. Try to find json inside markdown code blocks
+    # Try ```json ... ``` first
+    json_blocks = re.findall(r"```json\s*(.*?)\s*```", clean_text, flags=re.DOTALL)
+    if json_blocks:
+        for block in json_blocks:
+            try:
+                parsed = json.loads(block.strip())
+                print("\n========== EXTRACTED JSON (from ```json block) ==========")
+                print(block.strip())
+                print("=========================================================\n")
+                return parsed
+            except json.JSONDecodeError:
+                continue
 
-    print("\n========== EXTRACTED JSON ==========")
-    print(json_text)
-    print("====================================\n")
+    # Try general ``` ... ``` code blocks
+    code_blocks = re.findall(r"```\s*(.*?)\s*```", clean_text, flags=re.DOTALL)
+    if code_blocks:
+        for block in code_blocks:
+            try:
+                parsed = json.loads(block.strip())
+                print("\n========== EXTRACTED JSON (from ``` block) ==========")
+                print(block.strip())
+                print("====================================================\n")
+                return parsed
+            except json.JSONDecodeError:
+                continue
 
-    return json.loads(json_text)
+    # 3. Fall back to finding the first { and last }
+    try:
+        start = clean_text.index("{")
+        end = clean_text.rindex("}") + 1
+        json_text = clean_text[start:end]
+        
+        print("\n========== EXTRACTED JSON (fallback) ==========")
+        print(json_text)
+        print("================================================\n")
+        return json.loads(json_text)
+    except (ValueError, json.JSONDecodeError) as e:
+        print(f"Error extracting JSON using fallback: {e}")
+        # If all else fails, try loading the clean_text as is
+        return json.loads(clean_text)
 
-
-    #
-        query = state["user_query"]
-
-        prompt = f"""
-You are the supervisor of a real-world multi-agent travel planning system.
-
-Decide which specialist agents are needed for this user request.
-
-Available agents:
-- flight_agent: use when flights, airports, airlines, routes, or airfare guidance are needed
-- hotel_agent: use when hotels, stays, neighborhoods, or accommodation are needed
-- weather_agent: use when weather, climate, season, packing, or forecast is useful
-- budget_agent: use when budget, affordability, cost, or price constraints are mentioned
-- itinerary_agent: almost always needed to produce the travel plan
-
-Return only JSON with this schema:
-{{
-  "selected_agents": ["flight_agent", "hotel_agent", "weather_agent", "budget_agent", "itinerary_agent"],
-  "trip_constraints": {{
-    "destination": "",
-    "origin": "",
-    "duration": "",
-    "budget": "",
-    "travel_style": "",
-    "special_preferences": []
-  }},
-  "reasoning": ""
-}}
-
-User request:
-{query}
-"""
-
-        raw = _llm_text(
-            "You route work to specialist agents. Return strict JSON only.",
-            prompt,
-        )
-        parsed = _json_from_llm(raw)
-
-        selected = parsed["selected_agents"]
-
-
-        return {
-        "selected_agents": selected,
-        "trip_constraints": parsed["trip_constraints"],
-        "supervisor_reasoning": parsed["reasoning"],
-        "messages": [AIMessage(content="Supervisor created the agent plan.")],
-        "llm_calls": state.get("llm_calls", 0) + 1,
-    }
 def supervisor_agent(state: TravelState):
     query = state["user_query"]
             

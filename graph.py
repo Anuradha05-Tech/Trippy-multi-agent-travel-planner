@@ -1,7 +1,6 @@
-from altair.utils import selection
-from langsmith._openapi_client.types import run_select_field
-from cryptography.x509 import certificate_transparency
+from typing import Callable, Any, cast
 import psycopg
+from psycopg.rows import dict_row
 from state import TravelState
 from agents import (
     flight_agent,
@@ -14,11 +13,12 @@ from agents import (
     supervisor_agent,
 )
 
-from langgraph.graph import StateGraph,START,END
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.state import CompiledStateGraph
 from langgraph.checkpoint.postgres import PostgresSaver
 from config import DATABASE_URL
 
-AGENT_ORDER =[
+AGENT_ORDER = [
     "flight_agent",
     "hotel_agent",
     "weather_agent",
@@ -26,24 +26,27 @@ AGENT_ORDER =[
     "itinerary_agent"
 ]
 
-ROUTE_MAP ={
+ROUTE_MAP = {
     "flight_agent": "flight_agent",
     "hotel_agent": "hotel_agent",
     "weather_agent": "weather_agent",
     "budget_agent": "budget_agent",
-    "itinerary_agent": "itinerary_agent"
+    "itinerary_agent": "itinerary_agent",
+    "final_response": "final_response"
 }
 
 def _selected_agents(state: TravelState) -> list[str]:
-    selected = state.get("selected_agents")
+    selected = state.get("selected_agents", [])
     return [agent for agent in AGENT_ORDER if agent in selected]
 
-def route_from_supervisor(state :TravelState) -> str:
+def route_from_supervisor(state: TravelState) -> str:
+    if state.get("final_response"):
+        return "final_response"
     selected = _selected_agents(state)
     return selected[0] if selected else "itinerary_agent"
 
 
-def route_after_agent(current_agent: str):
+def route_after_agent(current_agent: str) -> Callable[[TravelState], str]:
     def route(state: TravelState) -> str:
         selected = _selected_agents(state)
         current_index = AGENT_ORDER.index(current_agent)
@@ -57,8 +60,8 @@ def route_after_agent(current_agent: str):
     return route
 
 
-def build_graph():
-    graph = StateGraph(TravelState)
+def build_graph() -> CompiledStateGraph:
+    graph = StateGraph(cast(Any, TravelState))
 
     graph.add_node("supervisor", supervisor_agent)
     graph.add_node("flight_agent", flight_agent)
@@ -80,12 +83,18 @@ def build_graph():
     graph.add_edge("final_response", END)
 
     if DATABASE_URL:
-        conn = psycopg.connect(DATABASE_URL)
-        checkpointer = PostgresSaver(conn)
-        checkpointer.setup()
-        return graph.compile(checkpointer=checkpointer)
-
-    return graph.compile()
+        try:
+            conn = psycopg.connect(DATABASE_URL, row_factory=dict_row, autocommit=True)
+            checkpointer = PostgresSaver(conn)
+            checkpointer.setup()
+            return graph.compile(checkpointer=checkpointer)
+        except Exception as e:
+            print(f"Warning: PostgreSQL Saver connection failed: {e}. Falling back to MemorySaver.")
+            from langgraph.checkpoint.memory import MemorySaver
+            return graph.compile(checkpointer=MemorySaver())
+    else:
+        from langgraph.checkpoint.memory import MemorySaver
+        return graph.compile(checkpointer=MemorySaver())
 
 
 app = build_graph()
