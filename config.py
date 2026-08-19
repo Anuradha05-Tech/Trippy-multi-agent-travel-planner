@@ -10,6 +10,12 @@ AVIATION_STACK_API_KEY = os.getenv("AVIATION_STACK_API_KEY") or os.getenv("AVIAT
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
 
 def get_llm():
-    return ChatGroq(
-        model = os.getenv("GROQ_MODEL", "qwen/qwen3.6-27b"),
-    )
+    primary_model = os.getenv("GROQ_MODEL", "qwen/qwen3.6-27b")
+    primary_llm = ChatGroq(model=primary_model)
+    
+    # Fallback models in case primary model hits rate limit or daily limit
+    fallbacks = [
+        ChatGroq(model="openai/gpt-oss-20b"),
+        ChatGroq(model="openai/gpt-oss-120b"),
+    ]
+    return primary_llm.with_fallbacks(fallbacks)

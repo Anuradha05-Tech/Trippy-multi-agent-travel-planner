@@ -21,7 +21,9 @@ def _llm_text(system: str, prompt: str) -> str:
             content=prompt
         )
     ])
-    return response.content
+    # Strip <think>...</think> blocks from text response content if present
+    clean_content = re.sub(r"<think>.*?</think>", "", response.content, flags=re.DOTALL).strip()
+    return clean_content
 
 def _json_from_llm(text: str) -> dict:
     print("\n========== RAW LLM RESPONSE ==========")
@@ -125,6 +127,10 @@ def supervisor_agent(state: TravelState):
 
 
     # supervisor logic is starting from here:
+    existing_constraints = state.get("trip_constraints", {})
+    context_str = ""
+    if existing_constraints:
+        context_str = f"\nPrevious Trip Context:\n{json.dumps(existing_constraints, indent=2)}\n"
 
     prompt = f"""
 You are the supervisor of a real-world multi-agent travel planning system.
@@ -151,8 +157,8 @@ Return only JSON with this schema:
   }},
   "reasoning": ""
 }}
-
-User request:
+{context_str}
+User request (could be a follow-up or adjustment to previous trip):
 {query}
 """
 
@@ -193,9 +199,20 @@ User request:
     
     selected = parsed["selected_agents"]    
 
+    # Merge new constraints with existing ones, preserving previous values if new ones are empty
+    merged_constraints = {}
+    new_constraints = parsed.get("trip_constraints", {})
+    for k in ["destination", "origin", "duration", "budget", "travel_style", "special_preferences"]:
+        old_val = existing_constraints.get(k)
+        new_val = new_constraints.get(k)
+        if new_val and (not isinstance(new_val, list) or len(new_val) > 0):
+            merged_constraints[k] = new_val
+        else:
+            merged_constraints[k] = old_val if old_val is not None else ([] if k == "special_preferences" else "")
+
     return {
         "selected_agents": selected,
-        "trip_constraints": parsed["trip_constraints"],
+        "trip_constraints": merged_constraints,
         "supervisor_reasoning": parsed["reasoning"],
         "messages": [AIMessage(content="Supervisor created the agent plan.")],
         "llm_calls": state.get("llm_calls", 0) + 1,
@@ -225,7 +242,8 @@ def flight_agent(state: TravelState):
     print("======================================\n")
 
     prompt = f"""
-Create flight guidance for this trip.
+Create highly concise flight guidance for this trip.
+Keep your output short (max 150 words).
 
 User request:
 {query}
@@ -234,14 +252,12 @@ Trip constraints:
 {constraints}
 
 Airport MCP data:
-{str(airports)[:3000]}
+{str(airports)[:1500]}
 
 Airline MCP data:
-{str(airlines)[:3000]}
+{str(airlines)[:1500]}
 
-Include likely departure/arrival airports, relevant airlines,
-estimated duration, fare range, peak season warning,
-and booking advice.
+Include departure/arrival airports, key airlines, estimated duration, fare range, and one quick booking tip.
 """
 
     result = _llm_text(
@@ -263,21 +279,51 @@ and booking advice.
 def hotel_agent(state: TravelState):
     query = f"Best hotels and areas to stay for: {state['user_query']}"
 
-    result = asyncio.run(tavily_search(query))
+    raw_results = asyncio.run(tavily_search(query))
 
     print("\n========== HOTEL SEARCH RESULT ==========")
+    print(raw_results)
+    print("=========================================\n")
+
+    prompt = f"""
+You are an accommodation specialist. Below is a set of raw search results.
+Provide highly concise hotel recommendations (max 200 words).
+Extract exactly 3 hotels (1 budget, 1 mid-range, 1 luxury) with names, area, nightly price, and one pro/con.
+
+User Request:
+{state['user_query']}
+
+Trip Constraints:
+{state.get('trip_constraints', {})}
+
+Raw Search Results:
+{str(raw_results)[:3000]}
+
+Format a clean recommendation report listing:
+1. Recommended neighborhoods/areas
+2. The 3 selected hotels
+3. One direct booking tip
+"""
+
+    result = _llm_text(
+        "You are a travel accommodation specialist.",
+        prompt,
+    )
+
+    print("\n========== HOTEL AGENT OUTPUT ==========")
     print(result)
     print("=========================================\n")
 
     return {
-        "hotel_results": str(result),
+        "hotel_results": result,
         "messages": [AIMessage(content="Hotel agent completed.")],
+        "llm_calls": state.get("llm_calls", 0) + 1,
     }
+
 
 def weather_agent(state: TravelState):
     constraints = state["trip_constraints"]
     city = constraints["destination"]
-
 
     weather_data = asyncio.run(current_weather(city))
     forecast_data = asyncio.run(forecast(city))
@@ -290,13 +336,24 @@ def weather_agent(state: TravelState):
     print(forecast_data)
     print("======================================\n")
 
-    result = f"""
-Current weather:
-{weather_data}
+    prompt = f"""
+You are a travel weather specialist. Below is raw weather and forecast data for {city}.
+Summarize this into a short, practical travel forecast (max 100 words).
+Include:
+1. Current temperature/conditions.
+2. Brief 3-day overview.
+3. Simple packing advice.
 
-Forecast:
-{forecast_data}
+Raw Weather Data:
+{str(weather_data)[:1000]}
+
+Raw Forecast Data:
+{str(forecast_data)[:2000]}
 """
+    result = _llm_text(
+        "You are a travel weather specialist.",
+        prompt,
+    )
 
     print("\n========== WEATHER AGENT OUTPUT ==========")
     print(result)
@@ -305,7 +362,9 @@ Forecast:
     return {
         "weather_results": result,
         "messages": [AIMessage(content="Weather agent completed.")],
+        "llm_calls": state.get("llm_calls", 0) + 1,
     }
+
 
 def budget_agent(state: TravelState):
 
@@ -322,6 +381,7 @@ def budget_agent(state: TravelState):
 
     prompt = f"""
 Analyze whether this trip plan is realistic for the user's budget.
+Provide a highly concise budget assessment (max 120 words).
 
 User request:
 {state['user_query']}
@@ -338,11 +398,11 @@ Hotel results:
 Weather results:
 {state.get('weather_results', '')}
 
-Return a concise budget assessment with:
-1. estimated cost categories
-2. risk areas
-3. money-saving suggestions
-4. whether the plan seems feasible
+Include:
+1. Estimated cost breakdown
+2. Top 2 budget risks
+3. Top 2 saving tips
+4. Feasibility yes/no
 """
 
     result = _llm_text(
@@ -453,57 +513,74 @@ def human_approval_agent(state: TravelState):
 
 
 def final_response_agent(state: TravelState):
-
     print("\n========== FINAL AGENT INPUT ==========")
     print("Approved:", state.get("approved"))
     print("Feedback:", state.get("human_feedback"))
     print("=======================================\n")
 
+    flight_info = state.get("flight_results", "")
+    hotel_info = state.get("hotel_results", "")
+    weather_info = state.get("weather_results", "")
+    budget_info = state.get("budget_results", "")
+    itinerary_info = state.get("itinerary", "")
+
+    specialist_data = ""
+    if flight_info:
+        specialist_data += f"\nFlight Guidance:\n{flight_info}\n"
+    if hotel_info:
+        specialist_data += f"\nHotel Recommendations:\n{hotel_info}\n"
+    if weather_info:
+        specialist_data += f"\nWeather Outlook:\n{weather_info}\n"
+    if budget_info:
+        specialist_data += f"\nBudget Assessment:\n{budget_info}\n"
+
     if state["approved"]:
         prompt = f"""
-The human approved this draft itinerary.
+The human approved the draft itinerary. 
 
-Produce the final polished travel plan.
+Combine all the details into a cohesive, final polished travel plan.
+Ensure the output integrates the flight guidance, hotel recommendations, weather outlook, budget assessment, and the day-by-day itinerary into a single, beautifully organized, user-ready document.
 
 Draft itinerary:
-{state['itinerary']}
+{itinerary_info}
 
-Budget notes:
-{state['budget_results']}
+{specialist_data}
 """
     else:
         prompt = f"""
-The human did not approve the draft.
+The human requested adjustments/revisions to the draft itinerary.
 
-Original user request:
+Original request:
 {state['user_query']}
 
-Draft itinerary:
-{state['itinerary']}
-
-Human feedback:
+Human feedback / requested adjustments:
 {state['human_feedback']}
 
-Budget notes:
-{state['budget_results']}
+Review the draft and feedback, and integrate the flight guidance, hotel recommendations, weather outlook, budget assessment, and updated day-by-day itinerary into a single, cohesive, final polished travel plan.
+
+Draft itinerary:
+{itinerary_info}
+
+{specialist_data}
 """
 
+    system_prompt = (
+        "You are an expert travel concierge. You produce final user-ready travel plans.\n"
+        "Do NOT output any thinking process, reasoning, planning steps, or mock tool calls.\n"
+        "Return ONLY the final polished itinerary and travel plan in clean, beautiful, and highly readable markdown.\n"
+        "Do not include any HTML tags, system logs, or JSON blocks. Make the presentation professional and clear for a normal traveler."
+    )
+
     result = _llm_text(
-        "You produce final user-ready travel plans.",
+        system_prompt,
         prompt,
     )
 
     print("\n========== FINAL RESPONSE ==========")
     print(result)
-    print("====================================\n")
 
     return {
         "final_response": result,
         "messages": [AIMessage(content=result)],
         "llm_calls": state.get("llm_calls", 0) + 1,
     }
-
-
-
-   
-
