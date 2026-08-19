@@ -16,7 +16,7 @@ flowchart TD
     Guard -->|Invalid| Rejected[Show Rejection / Ask Again]
     Guard -->|Valid| Super[🤖 Supervisor Agent]
     
-    subgraph Specialist Agents (Parallel Execution)
+    subgraph "Specialist Agents (Parallel Execution)"
         Super -->|Selects| FA[✈️ Flight Agent]
         Super -->|Selects| HA[🏨 Hotel Agent]
         Super -->|Selects| WA[☀️ Weather Agent]
